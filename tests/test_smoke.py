@@ -13,6 +13,7 @@ from conductor.config import (
     load_config,
 )
 from conductor.orchestrator import Orchestrator
+from conductor.session import DONE, SKIPPED, SessionStore
 
 
 # --------------------------------------------------------------------------- #
@@ -104,7 +105,9 @@ def _orch_with_fakes(tmp_path: Path) -> Orchestrator:
         roles={"planner": "claude", "coder": "codex", "debugger": "glm", "designer": "glm"},
         orchestration=OrchestrationConfig(max_debug_rounds=2, verify_command=""),
     )
-    orch = Orchestrator(cfg, work_dir=tmp_path)
+    # 用临时会话存储, 避免污染真实 ~/.conductor/sessions
+    orch = Orchestrator(cfg, work_dir=tmp_path,
+                        session_store=SessionStore(base_dir=tmp_path / "sessions"))
     orch._backends = {
         "claude": _FakeBackend("claude", PLAN_JSON),
         "codex": _FakeBackend("codex", "已实现"),
@@ -117,7 +120,8 @@ def test_run_dry_run_skips_execution(tmp_path):
     orch = _orch_with_fakes(tmp_path)
     report = orch.run("做一个登录页", dry_run=True)
     assert len(report.steps) == 2
-    assert all(r.skipped for r in report.runs)
+    assert len(report.records) == 2
+    assert all(r.status == SKIPPED for r in report.records.values())
     # dry-run 不应真正执行非 planner 后端
     assert orch._backends["codex"].calls == 0
     # 但 planner 仍被调用以生成计划
@@ -128,8 +132,8 @@ def test_run_real_executes_all_steps(tmp_path):
     orch = _orch_with_fakes(tmp_path)
     report = orch.run("做一个登录页", dry_run=False)
     assert report.plan_source == "planner"
-    assert len(report.runs) == 2
-    assert all(not r.skipped for r in report.runs)
+    assert len(report.records) == 2
+    assert all(r.status == DONE for r in report.records.values())
     assert orch._backends["codex"].calls == 1
     assert orch._backends["glm"].calls == 1
     assert report.verify_ok is None  # 未配置校验命令

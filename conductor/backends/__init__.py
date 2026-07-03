@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from .base import Backend, BackendRequest, BackendResult, make_backend
+from .base import Backend, BackendRequest, BackendResult, StreamEvent, make_backend
 
-__all__ = ["Backend", "BackendRequest", "BackendResult", "make_backend"]
+__all__ = ["Backend", "BackendRequest", "BackendResult", "StreamEvent", "make_backend"]

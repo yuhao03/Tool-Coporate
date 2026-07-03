@@ -96,11 +96,32 @@ verify_command = ""              # 例如 "pytest -q"
 | `conductor backends` | 列出后端 + 健康检查（二进制/密钥是否就绪） |
 | `conductor who <role>` | 查询某角色由哪个后端负责 |
 | `conductor plan "<task>"` | 只跑 planner，打印分步计划 |
-| `conductor ask <role> "<prompt>"` | 单角色直问 |
-| `conductor run "<task>"` | 全自动编排（plan→execute→verify→debug 循环） |
+| `conductor ask <role> "<prompt>"` | 单角色直问（`--stream` 逐字） |
+| `conductor run "<task>"` | 全自动编排（plan→并发 execute→verify→debug 循环） |
+| `conductor resume <id>` | 续跑某次会话（复用已完成步骤） |
+| `conductor sessions` / `session <id>` | 列出 / 查看会话（含成本） |
+| `conductor board [id]` | 步骤看板（静态） |
+| `conductor mcp` | 以 MCP server 运行，供 Claude Code 调用 |
 
-所有命令都支持 `--dry-run`。
+`run` / `resume` 常用选项：`--dry-run`、`--jobs N`（并发）、`--board`（TUI 看板）、`--stream`（流式）。
+
+## 进阶用法
+
+**并发执行**：planner 在计划里用 `depends_on` 标注依赖，无依赖步骤可并发（注意：多个 coder/designer 改同一目录可能冲突，故默认串行，`--jobs 2+` 开启）。
+
+**会话续跑**：`conductor run` 每次落盘一个会话；中断或失败后 `conductor resume <id>` 只重跑未完成步骤。
+
+**流式 + 看板**：`conductor run "..." --board --stream` 实时看步骤状态、GLM 输出逐字浮现。
+
+**成本统计**：自动收集 token 用量并估算 USD，会话详情与总结里可见；可在配置 `[cost.pricing]` 覆盖定价。
+
+**作为 MCP 工具接入 Claude Code**：
+```bash
+uv pip install 'conductor[mcp]'          # 装可选依赖
+claude mcp add conductor -- conductor mcp  # 注册到 Claude Code
+# 之后在 Claude Code 里直接: 用 conductor_plan / conductor_ask / conductor_run
+```
 
 ## 状态
 
-v0.1：配置、四个后端、run/ask/plan、debug 循环、dry-run、冒烟测试。
+v0.3：v0.1 全部能力 + 依赖图并发 + 流式输出 + 会话续跑 + TUI 看板 + 成本统计 + MCP server。25 个单测通过。

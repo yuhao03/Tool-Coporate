@@ -64,6 +64,8 @@ class Config:
     backends: dict[str, BackendConfig] = field(default_factory=dict)
     roles: dict[str, str] = field(default_factory=dict)
     orchestration: OrchestrationConfig = field(default_factory=OrchestrationConfig)
+    # 成本定价覆盖: {model: (input_usd_per_Mtok, output_usd_per_Mtok)}; 空则用内置默认
+    pricing: dict[str, tuple[float, float]] = field(default_factory=dict)
     sources: list[Path] = field(default_factory=list)  # 实际加载过的文件
 
     def role_for(self, role: str) -> str:
@@ -133,6 +135,10 @@ designer = "glm"
 max_debug_rounds = 2
 verify_command = ""                # 例: "pytest -q" / "npm run build"
 plan_fallback_role = "coder"
+
+# [cost] 可选: 覆盖内置定价(USD / 每百万 token). 不写则用内置默认估算.
+# [cost.pricing]
+# "glm-5.2" = { input = 0.6, output = 2.2 }
 """
 
 
@@ -169,7 +175,14 @@ def _build_config(data: dict[str, Any]) -> Config:
         backends[name] = bc
     roles = dict(data.get("roles") or {})
     orch = _dataclass_from(OrchestrationConfig, data.get("orchestration") or {})
-    return Config(backends=backends, roles=roles, orchestration=orch)
+    # 可选定价覆盖: [cost.pricing] 下 model = {input=.., output=..}
+    pricing: dict[str, tuple[float, float]] = {}
+    for model, vals in ((data.get("cost") or {}).get("pricing") or {}).items():
+        try:
+            pricing[model] = (float(vals.get("input", 0)), float(vals.get("output", 0)))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return Config(backends=backends, roles=roles, orchestration=orch, pricing=pricing)
 
 
 def load_config(project_dir: Path | None = None) -> Config:

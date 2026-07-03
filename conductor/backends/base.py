@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import BackendConfig
+from ..cost import Usage
 
 log = logging.getLogger("conductor.backend")
 
@@ -36,8 +37,20 @@ class BackendResult:
     text: str
     error: str | None = None
     model: str | None = None
+    usage: Usage | None = None
+    cost_usd: float | None = None
     # 各后端可放诊断信息, 如实际执行的命令 / 耗时
     meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StreamEvent:
+    """流式事件. type: 'delta'(增量文本) | 'done'(完成) | 'error'(失败)."""
+    type: str
+    text: str = ""
+    usage: Usage | None = None
+    model: str | None = None
+    error: str | None = None
 
 
 class Backend(ABC):
@@ -55,6 +68,19 @@ class Backend(ABC):
     @abstractmethod
     def complete(self, req: BackendRequest) -> BackendResult:
         """执行一次请求."""
+
+    def stream(self, req: BackendRequest):
+        """流式执行, 产出 StreamEvent 序列.
+
+        默认实现: 调用 complete() 后一次性给出 done/error 事件.
+        支持真流式的后端(如 HTTP SSE)覆写此方法, 产出多个 'delta' 事件.
+        """
+        from typing import Iterator  # noqa: F401
+        res = self.complete(req)
+        if res.ok:
+            yield StreamEvent(type="done", text=res.text, usage=res.usage, model=res.model)
+        else:
+            yield StreamEvent(type="error", error=res.error or "(未知错误)")
 
     @abstractmethod
     def health(self) -> tuple[bool, str]:

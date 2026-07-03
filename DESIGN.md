@@ -200,19 +200,25 @@ tool-coporate/
 ├── DESIGN.md                 ← 本文档
 ├── conductor/
 │   ├── __init__.py
-│   ├── config.py             配置加载/合并/默认
+│   ├── config.py             配置加载/合并/默认 + 定价覆盖
 │   ├── roles.py              角色定义 + 系统提示词
 │   ├── router.py             planner meta-prompt + JSON 计划解析
-│   ├── orchestrator.py       run/ask 主流程 + debug 循环
-│   ├── render.py             rich 渲染（面板/颜色）
-│   ├── cli.py                typer 入口：init/config/who/ask/run/plan/backends
+│   ├── graph.py              依赖图 + 环检测 + 波次化并发调度
+│   ├── session.py            会话/步骤记录 + JSON 持久化(resume)
+│   ├── cost.py               token 用量 + 定价表 + 成本估算
+│   ├── orchestrator.py       run/ask 主流程 + debug 循环 + 会话 + 流式
+│   ├── render.py             rich 渲染: 行内 / TUI 看板(live)
+│   ├── mcp_server.py         MCP server(让 Claude Code 直接调用)
+│   ├── cli.py                typer 入口
 │   └── backends/
 │       ├── __init__.py
-│       ├── base.py           Backend 抽象 + 工厂
-│       ├── cli_backends.py   claude / codex
-│       └── openai_compat.py  GLM/OpenAI/DeepSeek …
+│       ├── base.py           Backend 抽象 + StreamEvent + 工厂
+│       ├── cli_backends.py   claude(--output-format json) / codex
+│       └── openai_compat.py  GLM/OpenAI/DeepSeek …(SSE 流式 + usage)
 ├── tests/
-│   └── test_smoke.py
+│   ├── test_smoke.py
+│   ├── test_units.py
+│   └── test_advanced.py
 └── examples/
     └── example-task.md
 ```
@@ -221,6 +227,13 @@ tool-coporate/
 
 ## 9. 路线图
 
-- **v0.1（本次）**：配置 + 4 后端 + run/ask/plan + debug 循环 + dry-run + 冒烟测试。
-- v0.2：并发执行无依赖步骤（depends_on 图）、流式输出、会话续跑。
-- v0.3：Web UI / TUI 看板、成本统计、MCP server 形态（让 Claude Code 直接调用本工具）。
+- **v0.1 ✅**：配置 + 4 后端 + run/ask/plan + debug 循环 + dry-run + 冒烟测试。
+- **v0.2 ✅**：
+  - **依赖图并发**：`graph.py` 按 `depends_on` 构 DAG、环检测、波次化执行；`--jobs N` 开启同波次并发（默认 1 串行，因 acting 步骤改同一目录可能冲突）。
+  - **流式输出**：HTTP 后端走 SSE 真流式逐字；`--stream` 开启；`ask --stream` 也可。
+  - **会话续跑**：每次 run 持久化为 `~/.conductor/sessions/<id>.json`；`conductor resume <id>` 复用已完成步骤。
+- **v0.3 ✅**：
+  - **TUI 看板**：`--board` 实时刷新步骤状态表；`conductor board [id]` 看静态看板。
+  - **成本统计**：收集 `usage`，按定价表估 USD（claude 直读 `total_cost_usd`）；会话/总结/`conductor session` 均展示。
+  - **MCP server**：`conductor mcp` 以 stdio 暴露 `conductor_plan/ask/run/who/backends` 工具，Claude Code 可 `claude mcp add conductor -- conductor mcp` 直接调用。
+- **v0.4（计划）**：Web UI（FastAPI + 看板 SSE）、跨会话上下文记忆、步骤级回滚（git worktree 隔离并发执行）、流式 token 成本预算熔断。

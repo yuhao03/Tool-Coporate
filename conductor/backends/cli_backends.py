@@ -2,15 +2,46 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from ..cost import Usage
 from .base import Backend, BackendRequest, BackendResult
 
 log = logging.getLogger("conductor.backend.cli")
+
+
+def _parse_claude_json(out: str):
+    """解析 claude --output-format json 的输出.
+
+    返回 (text, usage, model, cost_usd); 解析失败返回 (None, None, None, None).
+    典型结构: {"result":"...", "usage":{"input_tokens":..,"output_tokens":..},
+              "total_cost_usd":.., "model":"..."}
+    """
+    try:
+        data = json.loads(out)
+    except (ValueError, json.JSONDecodeError):
+        return None, None, None, None
+    text = data.get("result")
+    raw_usage = data.get("usage") or {}
+    usage = None
+    if raw_usage:
+        usage = Usage(
+            input_tokens=int(raw_usage.get("input_tokens") or 0),
+            output_tokens=int(raw_usage.get("output_tokens") or 0),
+            model=data.get("model"),
+        )
+    cost = data.get("total_cost_usd")
+    if cost is not None:
+        try:
+            cost = float(cost)
+        except (TypeError, ValueError):
+            cost = None
+    return text, usage, data.get("model"), cost
 
 
 def _run(
@@ -50,7 +81,8 @@ class ClaudeCliBackend(Backend):
 
     def complete(self, req: BackendRequest) -> BackendResult:
         bin_ = self._bin()
-        cmd: list[str] = [bin_, "-p", req.prompt]
+        # --output-format json: 拿到结构化结果 + usage + 成本
+        cmd: list[str] = [bin_, "-p", req.prompt, "--output-format", "json"]
         if self.cfg.model:
             cmd += ["--model", self.cfg.model]
         cmd += list(self.cfg.extra_args)
@@ -62,7 +94,12 @@ class ClaudeCliBackend(Backend):
         if code != 0:
             detail = (err or out or "").strip()
             return BackendResult(ok=False, text=out, error=detail[:500] or f"退出码 {code}", meta=meta)
-        return BackendResult(ok=True, text=out.strip(), model=self.cfg.model or "claude", meta=meta)
+        text, usage, model, cost = _parse_claude_json(out)
+        if text is None:  # JSON 解析失败, 退回原始文本
+            text = out.strip()
+            model = self.cfg.model or "claude"
+        return BackendResult(ok=True, text=text, model=model or "claude",
+                             usage=usage, cost_usd=cost, meta=meta)
 
     def health(self) -> tuple[bool, str]:
         path = shutil.which(self._bin())
