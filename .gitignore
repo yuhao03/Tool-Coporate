@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# uv / tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Conductor local state
+.conductor/
+# 项目级配置可能含密钥, 一律不提交; 想分享非敏感配置请改名 conductor.example.toml
+conductor.toml
+conductor.toml.local

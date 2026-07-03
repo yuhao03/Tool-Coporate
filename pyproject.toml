@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "conductor"
+version = "0.1.0"
+description = "多 AI 角色编排 CLI: Claude 出方案、Codex 干活、GLM 排错/做前端"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "yh" }]
+keywords = ["ai", "orchestration", "claude", "codex", "glm", "agents"]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "httpx>=0.27",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.scripts]
+conductor = "conductor.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["conductor"]
+
+[tool.hatch.build.targets.sdist]
+include = ["conductor", "README.md", "DESIGN.md", "examples"]
