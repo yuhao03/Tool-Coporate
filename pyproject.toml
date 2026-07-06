@@ -4,13 +4,25 @@ build-backend = "hatchling.build"
 
 [project]
 name = "conductor"
-version = "0.3.0"
-description = "多 AI 角色编排 CLI: Claude 出方案、Codex 干活、GLM 排错/做前端"
+version = "0.4.0"
+description = "多 AI 角色编排: Claude 出方案、Codex 干活、GLM 排错/做前端 — CLI + Web UI + MCP"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "yh" }]
-keywords = ["ai", "orchestration", "claude", "codex", "glm", "agents", "mcp"]
+authors = [{ name = "yuhao03" }]
+keywords = ["ai", "orchestration", "claude", "codex", "glm", "agents", "mcp", "multi-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+]
 dependencies = [
     "typer>=0.12",
     "rich>=13.7",
@@ -18,8 +30,15 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
 ]
 
+[project.urls]
+Homepage = "https://github.com/yuhao03/Tool-Coporate"
+Repository = "https://github.com/yuhao03/Tool-Coporate"
+Issues = "https://github.com/yuhao03/Tool-Coporate/issues"
+
 [project.optional-dependencies]
 mcp = ["mcp>=1.2"]
+web = ["fastapi>=0.110", "uvicorn>=0.27"]
+all = ["mcp>=1.2", "fastapi>=0.110", "uvicorn>=0.27"]
 
 [project.scripts]
 conductor = "conductor.cli:main"
@@ -27,5 +46,8 @@ conductor = "conductor.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["conductor"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"conductor/web_static" = "conductor/web_static"
+
 [tool.hatch.build.targets.sdist]
-include = ["conductor", "README.md", "DESIGN.md", "examples"]
+include = ["conductor", "tests", "examples", "README.md", "DESIGN.md", "LICENSE"]

@@ -23,11 +23,12 @@ from .backends import BackendRequest, BackendResult, make_backend
 from .config import Config
 from .cost import estimate_cost_usd
 from .graph import CycleError, Scheduler
-from .roles import system_prompt_for
+from .roles import ACTING_ROLES, system_prompt_for
 from .session import (
     DONE, FAILED, PENDING, RUNNING, SKIPPED, S_DONE, S_FAILED, S_INTERRUPTED,
     S_PLANNING, S_RUNNING, Session, SessionStore, StepRecord,
 )
+from .worktree import WorktreeIsolator
 
 log = logging.getLogger("conductor.orch")
 
@@ -58,11 +59,16 @@ class Orchestrator:
         work_dir: Path | str | None = None,
         session_store: SessionStore | None = None,
         max_workers: int = 1,
+        isolate: bool = False,
+        memory_context: str = "",
     ) -> None:
         self.cfg = config
         self.work_dir = Path(work_dir) if work_dir else Path.cwd()
         self.store = session_store or SessionStore()
         self.max_workers = max(1, max_workers)
+        self.isolate = isolate
+        self.memory_context = memory_context or ""
+        self._isolator: WorktreeIsolator | None = None
         self._backends: dict = {}
         self._lock = threading.RLock()
         # 进度回调; 默认静默. CLI 注入 rich 渲染器.
@@ -102,6 +108,16 @@ class Orchestrator:
     def _apply_cost(self, res: BackendResult) -> None:
         if res.cost_usd is None and res.usage:
             res.cost_usd = estimate_cost_usd(res.usage, self.cfg.pricing or None)
+
+    def _combined_context(self, context: str) -> str:
+        return "\n\n".join(p for p in [self.memory_context, context] if p)
+
+    def _get_isolator(self) -> WorktreeIsolator | None:
+        if not self.isolate:
+            return None
+        if self._isolator is None:
+            self._isolator = WorktreeIsolator(self.work_dir)
+        return self._isolator
 
     # ---- 计划 ----
     def plan(self, task: str, context: str = "") -> list[router.Step] | None:
@@ -152,7 +168,7 @@ class Orchestrator:
         else:
             steps = None
             try:
-                steps = self.plan(task, context)
+                steps = self.plan(task, self._combined_context(context))
             except KeyError as e:
                 self._emit({"type": "plan_error", "error": str(e)})
             if steps:
@@ -202,6 +218,13 @@ class Orchestrator:
         elif vcmd and dry_run:
             self._emit({"type": "verify_skip", "cmd": vcmd})
 
+        # 清理 worktree 隔离产生的临时工作树
+        if self._isolator is not None:
+            try:
+                self._isolator.cleanup()
+            except Exception as e:  # noqa: BLE001
+                log.warning("worktree 清理失败: %s", e)
+
         # ---- 收尾 ----
         report.cost_total_usd = _sum_costs(records)
         session.cost_total_usd = report.cost_total_usd
@@ -226,7 +249,8 @@ class Orchestrator:
             rec = session.record_for(step.title)
             self._emit({"type": "step_skip", "step": _step_view(step), "status": rec.status})
             return rec
-        be, req = self.request_for(step.role, _build_step_prompt(step, dep_results))
+        be, req = self.request_for(
+            step.role, _build_step_prompt(step, dep_results, self.memory_context))
         if dry_run:
             self._emit({"type": "step_start", "step": _step_view(step),
                         "describe": be.describe(req), "dry_run": True})
@@ -243,6 +267,19 @@ class Orchestrator:
         with self._lock:
             session.upsert_record(rec)
             self.store.save(session)
+
+        # worktree 隔离: acting 步骤在独立 worktree 执行, 之后提交并合并回主树
+        wt_branch: str | None = None
+        wt_dir: Path | None = None
+        if self.isolate and step.role in ACTING_ROLES:
+            isol = self._get_isolator()
+            if isol and isol.available():
+                prepared = isol.prepare(_slug(step.title))
+                if prepared is not None:
+                    wt_dir, wt_branch = prepared
+                    req.cwd = wt_dir
+                    self._emit({"type": "isolate", "step": _step_view(step),
+                                "worktree": str(wt_dir)})
 
         usage = None
         model = None
@@ -268,6 +305,17 @@ class Orchestrator:
             self._apply_cost(res)
             ok, text, error = res.ok, res.text, res.error
             usage, model, cost = res.usage, res.model, res.cost_usd
+
+        # 合并 worktree 改动回主工作树(失败则标记步骤失败)
+        if wt_branch is not None and wt_dir is not None and ok:
+            isol = self._get_isolator()
+            if isol:
+                isol.commit(wt_dir, f"conductor: {step.title}")
+                merged, conflict = isol.merge_back(wt_branch)
+                if not merged:
+                    ok = False
+                    error = (f"worktree 合并冲突: {conflict}"
+                             if isinstance(conflict, list) else f"worktree 合并失败: {conflict}")
 
         rec.text = text
         rec.error = error
@@ -362,8 +410,11 @@ def _trail_from_deps(dep_results: dict[str, StepRecord]) -> str:
     return "\n".join(lines)
 
 
-def _build_step_prompt(step: router.Step, dep_results: dict[str, StepRecord]) -> str:
+def _build_step_prompt(step: router.Step, dep_results: dict[str, StepRecord],
+                       memory: str = "") -> str:
+    mem_block = f"{memory}\n\n" if memory else ""
     return (
+        f"{mem_block}"
         f"[前置依赖的产出]\n{_trail_from_deps(dep_results)}\n\n"
         f"[你的角色] {step.role}\n"
         f"[本步目标] {step.title}\n"
@@ -372,6 +423,13 @@ def _build_step_prompt(step: router.Step, dep_results: dict[str, StepRecord]) ->
         "若是 planner/debugger(顾问型), 输出结构化分析或建议. "
         "完成后用 3~5 行给出改动/结论摘要."
     )
+
+
+def _slug(text: str) -> str:
+    """把步骤标题转成适合做 git 分支名的 slug."""
+    import re
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", (text or "step")).strip("-")
+    return s[:32] or "step"
 
 
 def _build_debug_prompt(vcmd: str, fail_out: str, trail) -> str:

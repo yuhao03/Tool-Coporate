@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Conductor · 多 AI 角色编排</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎼</text></svg>" />
+</head>
+<body>
+  <div class="app">
+    <!-- 侧栏 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">🎼</span>
+        <div>
+          <div class="brand-name">Conductor</div>
+          <div class="brand-sub">多 AI 角色编排</div>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h3>新建任务</h3>
+        <textarea id="task" rows="3" placeholder="描述要完成的任务, 例: 给项目加一个带表单校验的登录页"></textarea>
+        <div class="opts">
+          <label><input type="checkbox" id="opt-dryrun" /> 预演</label>
+          <label><input type="checkbox" id="opt-stream" checked /> 流式</label>
+          <label><input type="checkbox" id="opt-isolate" /> 隔离</label>
+          <label>并发 <input type="number" id="opt-jobs" value="1" min="1" max="8" /></label>
+        </div>
+        <button id="btn-run" class="primary">▶ 开始编排</button>
+        <div id="run-err" class="err"></div>
+      </section>
+
+      <section class="panel grow">
+        <h3>会话历史</h3>
+        <ul id="sessions" class="sessions"></ul>
+      </section>
+
+      <div class="backend-status" id="backends"></div>
+    </aside>
+
+    <!-- 主区 -->
+    <main class="main">
+      <header class="main-head">
+        <div>
+          <h2 id="active-task">选择一个会话，或新建任务开始</h2>
+          <div id="active-meta" class="muted"></div>
+        </div>
+        <div id="active-cost" class="cost-pill"></div>
+      </header>
+
+      <div id="steps" class="steps"></div>
+      <div id="final" class="final hidden"></div>
+    </main>
+
+    <!-- 记忆面板 -->
+    <aside class="memobar">
+      <section class="panel">
+        <h3>跨会话记忆</h3>
+        <p class="muted small">项目级与全局事实, 会自动注入任务上下文。</p>
+        <input id="mem-key" placeholder="键, 如: 技术栈" />
+        <textarea id="mem-content" rows="2" placeholder="内容, 如: 后端 FastAPI + 前端 React"></textarea>
+        <div class="mem-row">
+          <select id="mem-scope">
+            <option value="project">项目</option>
+            <option value="global">全局</option>
+          </select>
+          <button id="btn-mem" class="ghost">＋ 加入</button>
+        </div>
+        <ul id="memory" class="memory"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -23,6 +23,7 @@ from .config import (
     write_default_config,
 )
 from .cost import format_cost
+from .memory import GLOBAL_SCOPE, PROJECT_SCOPE, MemoryStore
 from .orchestrator import Orchestrator
 from .render import Renderer, STATUS_ICON
 from .roles import ROLES, title_for
@@ -43,10 +44,14 @@ def _renderer(verbose: bool = False, board: bool = False) -> Renderer:
 
 def _orch(
     verbose: bool = False, work_dir: str | None = None,
-    jobs: int = 1, board: bool = False,
+    jobs: int = 1, board: bool = False, isolate: bool = False,
+    gather_memory: bool = True,
 ) -> Orchestrator:
     cfg = load_config()
-    orch = Orchestrator(cfg, work_dir=work_dir or Path.cwd(), max_workers=jobs)
+    wd = work_dir or Path.cwd()
+    mem = MemoryStore(work_dir=wd).context_text() if gather_memory else ""
+    orch = Orchestrator(cfg, work_dir=wd, max_workers=jobs,
+                        isolate=isolate, memory_context=mem)
     orch.emit = _renderer(verbose, board=board)
     return orch
 
@@ -205,10 +210,13 @@ def run(
     jobs: int = typer.Option(1, "--jobs", "-j", min=1, help="并发数(>1 时无依赖步骤并发; 注意 acting 步骤改同一目录可能冲突)"),
     board: bool = typer.Option(False, "--board", "-b", help="TUI 看板实时刷新"),
     stream: bool = typer.Option(False, "--stream", help="流式输出(HTTP 后端逐字)"),
+    isolate: bool = typer.Option(False, "--isolate", help="acting 步骤在独立 git worktree 执行(并发安全, 需干净 git 仓库)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="显示 planner 原始输出与各步命令"),
 ) -> None:
     """全自动编排: plan → (依赖图并发) execute → verify → debug 循环."""
-    orch = _orch(verbose=verbose, work_dir=workdir or None, jobs=jobs, board=board)
+    if jobs > 1 and not isolate:
+        console.print("[yellow]提示: 并发(--jobs>1)且未 --isolate 时, acting 步骤改同一目录可能冲突; 建议加 --isolate[/]")
+    orch = _orch(verbose=verbose, work_dir=workdir or None, jobs=jobs, board=board, isolate=isolate)
     report = orch.run(task, dry_run=dry_run, stream=stream)
     if report.verify_ok is False:
         raise typer.Exit(1)
@@ -221,6 +229,7 @@ def resume(
     jobs: int = typer.Option(1, "--jobs", "-j", min=1),
     board: bool = typer.Option(False, "--board", "-b"),
     stream: bool = typer.Option(False, "--stream"),
+    isolate: bool = typer.Option(False, "--isolate"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """续跑某次会话: 复用已完成步骤, 重跑未完成/失败的步骤."""
@@ -228,7 +237,7 @@ def resume(
     if not s:
         console.print(f"[red]找不到会话 {session_id}[/] (用 conductor sessions 查看)")
         raise typer.Exit(1)
-    orch = _orch(verbose=verbose, jobs=jobs, board=board)
+    orch = _orch(verbose=verbose, jobs=jobs, board=board, isolate=isolate)
     report = orch.run(s.task, dry_run=dry_run, stream=stream, resume_id=session_id)
     if report.verify_ok is False:
         raise typer.Exit(1)
@@ -305,6 +314,111 @@ def board(
         t.add_row(str(i), f"[{style}]{rec.get('role','')}[/]", rec.get("title", ""),
                   icon, format_cost(rec.get("cost_usd")))
     console.print(t)
+
+
+# ---- 跨会话记忆 ----
+mem_app = typer.Typer(help="跨会话记忆: 记住项目约定/偏好, 自动注入任务上下文",
+                      no_args_is_help=True)
+app.add_typer(mem_app, name="memory")
+
+
+@mem_app.command("list")
+def memory_list(
+    scope: str = typer.Option("", "--scope", "-s", help="project/global, 默认全部"),
+) -> None:
+    """列出记忆条目."""
+    items = MemoryStore().list(scope=scope or None)
+    if not items:
+        console.print("[dim]暂无记忆. 用 conductor memory add 添加.[/]")
+        return
+    t = Table(title=f"记忆 ({len(items)})", show_header=True, header_style="bold")
+    t.add_column("id", width=10); t.add_column("范围", width=8)
+    t.add_column("键", width=16); t.add_column("内容", ratio=1)
+    for m in items:
+        t.add_row(m.id[:8], m.scope, m.key, m.content[:80])
+    console.print(t)
+
+
+@mem_app.command("add")
+def memory_add(
+    key: str = typer.Argument(..., help="键, 如 技术栈"),
+    content: str = typer.Argument(..., help="内容"),
+    scope: str = typer.Option(PROJECT_SCOPE, "--scope", "-s", help="project / global"),
+) -> None:
+    """添加一条记忆(默认项目级)."""
+    if scope not in (PROJECT_SCOPE, GLOBAL_SCOPE):
+        console.print(f"[red]scope 必须是 project 或 global[/]")
+        raise typer.Exit(2)
+    item = MemoryStore().add(key, content, scope=scope)
+    console.print(f"[green]✓ 已记 ({item.scope})[/] {item.key}: {item.content}  [dim]{item.id}[/]")
+
+
+@mem_app.command("remove")
+def memory_remove(
+    item_id: str = typer.Argument(..., help="记忆 id (见 memory list)"),
+) -> None:
+    """删除一条记忆."""
+    if MemoryStore().remove(item_id):
+        console.print(f"[green]✓ 已删除 {item_id}[/]")
+    else:
+        console.print(f"[yellow]未找到 {item_id}[/]")
+        raise typer.Exit(1)
+
+
+# ---- 诊断 ----
+@app.command()
+def doctor() -> None:
+    """诊断环境: Python / git / CLI / 密钥 / 可选依赖."""
+    import shutil
+    import sys
+
+    from . import __version__
+
+    def check(label: str, ok: bool, detail: str) -> None:
+        console.print(f"  [{'[green]✓[/]' if ok else '[red]✗[/]'}] {label}: {detail}")
+
+    console.print(f"[bold]Conductor {__version__} 环境诊断[/]\n")
+    check("Python", True, f"{sys.version.split()[0]}  ({sys.executable})")
+    check("git", shutil.which("git") is not None,
+          shutil.which("git") or "未安装(隔离并发需要)")
+    cfg = load_config()
+    for name, bc in cfg.backends.items():
+        try:
+            ok, note = make_backend(bc).health()
+        except ValueError as e:
+            ok, note = False, str(e)
+        check(f"后端 {name}", ok, note)
+    # 可选依赖
+    try:
+        import mcp  # noqa: F401
+        check("可选 mcp", True, "已安装 (conductor mcp 可用)")
+    except ModuleNotFoundError:
+        check("可选 mcp", False, "未安装: uv pip install 'conductor\\[mcp]'")
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+        check("可选 web", True, "已安装 (conductor web 可用)")
+    except ModuleNotFoundError:
+        check("可选 web", False, "未安装: uv pip install 'conductor\\[web]'")
+    check("配置", user_config_path().exists(),
+          str(user_config_path()) + (" (存在)" if user_config_path().exists() else " (用 init 生成)"))
+
+
+# ---- Web UI ----
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", "-h"),
+    port: int = typer.Option(8765, "--port", "-p"),
+    workdir: str = typer.Option("", "--workdir", "-C", help="项目工作目录(默认当前)"),
+) -> None:
+    """启动 Web UI 看板(实时 SSE). 需可选依赖: uv pip install 'conductor[web]'."""
+    try:
+        from .web import run_server
+    except ModuleNotFoundError:
+        console.print("[red]缺少 web 依赖。请安装: uv pip install 'conductor\\[web]'[/]")
+        raise typer.Exit(1)
+    console.print(f"[bold]🎼 Conductor Web UI[/] → [cyan]http://{host}:{port}[/]")
+    run_server(host=host, port=port, work_dir=workdir or None)
 
 
 @app.command()
