@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +15,23 @@ from ..cost import Usage
 from .base import Backend, BackendRequest, BackendResult
 
 log = logging.getLogger("conductor.backend.cli")
+
+_VAR_RE = re.compile(r"\$\{(\w+)\}")
+
+
+def _expand(value: str) -> str:
+    """展开字符串里的 ${VAR} 为 os.environ 取值(未设置则为空串)."""
+    return _VAR_RE.sub(lambda m: os.environ.get(m.group(1), ""), value or "")
+
+
+def _build_env(extra_env: dict | None) -> dict | None:
+    """合并 os.environ 与 extra_env(值经 ${VAR} 展开); extra_env 为空返回 None."""
+    if not extra_env:
+        return None
+    env = dict(os.environ)
+    for k, v in extra_env.items():
+        env[k] = _expand(v)
+    return env
 
 
 def _parse_claude_json(out: str):
@@ -45,11 +64,13 @@ def _parse_claude_json(out: str):
 
 
 def _run(
-    cmd: list[str], cwd: Path | None, timeout: int, input_text: str | None = None
+    cmd: list[str], cwd: Path | None, timeout: int, input_text: str | None = None,
+    extra_env: dict | None = None,
 ) -> tuple[int, str, str, str | None]:
     """运行子进程, 返回 (returncode, stdout, stderr, timeout_msg).
 
     使用参数列表(非 shell 字符串), 跨平台一致且无需转义.
+    extra_env 注入子进程环境变量(如把 claude 指向智谱端点), 值经 ${VAR} 展开.
     """
     try:
         kwargs: dict = dict(
@@ -58,6 +79,9 @@ def _run(
             text=True,
             timeout=timeout,
         )
+        env = _build_env(extra_env)
+        if env is not None:
+            kwargs["env"] = env
         if input_text is not None:
             kwargs["input"] = input_text
         else:
@@ -87,7 +111,7 @@ class ClaudeCliBackend(Backend):
             cmd += ["--model", self.cfg.model]
         cmd += list(self.cfg.extra_args)
         timeout = req.timeout or self.cfg.timeout
-        code, out, err, tmsg = _run(cmd, req.cwd, timeout)
+        code, out, err, tmsg = _run(cmd, req.cwd, timeout, extra_env=self.cfg.env)
         meta = {"cmd": _truncate_cmd(cmd)}
         if tmsg:
             return BackendResult(ok=False, text="", error=tmsg, meta=meta)
@@ -103,9 +127,18 @@ class ClaudeCliBackend(Backend):
 
     def health(self) -> tuple[bool, str]:
         path = shutil.which(self._bin())
-        if path:
-            return True, f"claude CLI 就绪: {path}"
-        return False, "未找到 claude CLI (安装 Claude Code 后重试)"
+        if not path:
+            return False, "未找到 claude CLI (安装 Claude Code 后重试)"
+        msgs = [f"claude CLI 就绪: {path}"]
+        # 若配置了 env(如把 claude 指向智谱端点跑 GLM), 检查引用的变量是否已设置
+        if self.cfg.env:
+            missing = [k for k, v in self.cfg.env.items()
+                       if "${" in v and not _expand(v)]
+            if missing:
+                msgs.append(f"⚠ env 未设置: {missing}")
+            if self.cfg.model:
+                msgs.append(f"模型 {self.cfg.model}(经端点)")
+        return True, " | ".join(msgs)
 
     def describe(self, req: BackendRequest) -> str:
         cmd = _truncate_cmd([self._bin(), "-p", req.prompt])
@@ -148,7 +181,7 @@ class CodexCliBackend(Backend):
         ) as tmp:
             out_file = tmp.name
         cmd = self._build_cmd(req, out_file)
-        code, _out, err, tmsg = _run(cmd, req.cwd, timeout)
+        code, _out, err, tmsg = _run(cmd, req.cwd, timeout, extra_env=self.cfg.env)
         meta = {"cmd": _truncate_cmd(cmd)}
         text = ""
         try:

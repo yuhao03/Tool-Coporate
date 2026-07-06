@@ -41,6 +41,9 @@ class BackendConfig:
     extra_config: dict[str, str] = field(default_factory=dict)  # codex -c key=val
     full_auto: bool = True         # codex 全自动(绕过审批/沙箱)
     timeout: int = 900             # 秒
+    # 注入子进程的环境变量(值支持 ${VAR} 展开, 引用 os.environ)
+    # 用途: 把 claude CLI 指向智谱 Z.ai/BigModel 的 Anthropic 兼容端点 -> GLM 也走 claude CLI
+    env: dict[str, str] = field(default_factory=dict)
 
     @property
     def resolved_api_key(self) -> str:
@@ -118,12 +121,22 @@ type = "claude-cli"
 type = "codex-cli"
 full_auto = true                   # 用 --dangerously-bypass-approvals-and-sandbox 实现全自动
 
+# GLM: 复用 claude CLI, 通过 env 指向智谱 Anthropic 兼容端点 = "GLM 的 CLI"。
+# 需 export ZHIPU_API_KEY=sk-...(智谱开放平台 API Key)。
+# 海外账号把 BASE_URL 换成 https://api.z.ai/api/anthropic, key 用 Z.ai 的。
 [backends.glm]
-type = "openai-compatible"
-base_url = "https://open.bigmodel.cn/api/paas/v4/"
+type = "claude-cli"
 model = "glm-5.2"
-api_key_env = "ZHIPU_API_KEY"
-# api_key = "sk-..."               # 或直接写死密钥
+[backends.glm.env]
+ANTHROPIC_BASE_URL = "https://open.bigmodel.cn/api/anthropic"
+ANTHROPIC_API_KEY = "${ZHIPU_API_KEY}"
+
+# —— 备选: 直接走 HTTP(OpenAI 兼容), 不经 claude CLI ——
+# [backends.glm]
+# type = "openai-compatible"
+# base_url = "https://open.bigmodel.cn/api/paas/v4/"
+# model = "glm-5.2"
+# api_key_env = "ZHIPU_API_KEY"
 
 [roles]
 planner  = "claude"
