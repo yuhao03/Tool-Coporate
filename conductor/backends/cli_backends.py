@@ -37,14 +37,14 @@ def _build_env(extra_env: dict | None) -> dict | None:
 def _parse_claude_json(out: str):
     """解析 claude --output-format json 的输出.
 
-    返回 (text, usage, model, cost_usd); 解析失败返回 (None, None, None, None).
-    典型结构: {"result":"...", "usage":{"input_tokens":..,"output_tokens":..},
-              "total_cost_usd":.., "model":"..."}
+    返回 (text, usage, model, cost_usd, is_error); 解析失败返回 (None,None,None,None,False).
+    注意: claude 在上游 API 报错(如 400 模型不存在)时, 退出码仍为 0, 但 json 里
+    is_error=true、result 里是 "API Error: ..." —— 必须据此判失败, 否则会被当成功。
     """
     try:
         data = json.loads(out)
     except (ValueError, json.JSONDecodeError):
-        return None, None, None, None
+        return None, None, None, None, False
     text = data.get("result")
     raw_usage = data.get("usage") or {}
     usage = None
@@ -60,7 +60,7 @@ def _parse_claude_json(out: str):
             cost = float(cost)
         except (TypeError, ValueError):
             cost = None
-    return text, usage, data.get("model"), cost
+    return text, usage, data.get("model"), cost, bool(data.get("is_error"))
 
 
 def _run(
@@ -118,7 +118,10 @@ class ClaudeCliBackend(Backend):
         if code != 0:
             detail = (err or out or "").strip()
             return BackendResult(ok=False, text=out, error=detail[:500] or f"退出码 {code}", meta=meta)
-        text, usage, model, cost = _parse_claude_json(out)
+        text, usage, model, cost, is_err = _parse_claude_json(out)
+        if is_err:  # 上游 API 报错(如 400 模型不存在), claude 退出码仍是 0
+            return BackendResult(ok=False, text="",
+                                 error=(text or "API 错误")[:500], meta=meta)
         if text is None:  # JSON 解析失败, 退回原始文本
             text = out.strip()
             model = self.cfg.model or "claude"
