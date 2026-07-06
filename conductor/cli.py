@@ -449,6 +449,49 @@ def mcp() -> None:
     raise typer.Exit(mcp_main())
 
 
+@app.command(name="mcp-install")
+def mcp_install(
+    scope: str = typer.Option("user", "--scope", "-s", help="local / user / project"),
+    zhipu_key: str = typer.Option("", "--key", "-k", help="ZHIPU_API_KEY; 不填则读环境变量或交互输入"),
+    server_cmd: str = typer.Option("conductor mcp", "--cmd", help="启动 conductor MCP server 的命令"),
+) -> None:
+    """一键把 conductor 注册成 Claude Code 的 MCP server(自动带 ZHIPU_API_KEY)。
+
+    注册后, 在 claude code 里 Claude 就能调 glm_review / codex_run / glm_chat。
+    GLM 的 key 只注入 conductor 子进程, 与 claude code 本体隔离。
+    """
+    import os
+    import shutil
+    import subprocess
+
+    claude = shutil.which("claude")
+    if not claude:
+        console.print("[red]未找到 claude CLI[/] (先装 Claude Code)");
+        raise typer.Exit(1)
+    key = zhipu_key or os.environ.get("ZHIPU_API_KEY", "")
+    if not key:
+        key = typer.prompt("请输入 ZHIPU_API_KEY (sk-...)", hide_input=True)
+    try:
+        import mcp  # noqa: F401
+    except ModuleNotFoundError:
+        console.print("[yellow]提示: 未装 mcp 依赖, 先跑: uv pip install 'conductor[mcp]'[/]")
+    args = ([claude, "mcp", "add", "conductor", "-e", f"ZHIPU_API_KEY={key}",
+             "-s", scope, "--"] + server_cmd.split())
+    console.print(f"[dim]注册中: claude mcp add conductor -e ZHIPU_API_KEY=*** "
+                  f"-s {scope} -- {server_cmd}[/]")
+    proc = subprocess.run(args, capture_output=True, text=True)
+    if proc.returncode == 0:
+        console.print(f"[green]✓ 已注册到 claude code (scope={scope})[/]")
+        if proc.stdout.strip():
+            console.print(f"  {proc.stdout.strip()}")
+        console.print("重启 claude code → 用 [cyan]/mcp[/] 查看; Claude 现在可调 "
+                      "[bold]glm_review / codex_run / glm_chat[/]。")
+    else:
+        console.print(f"[red]注册失败:[/]\n{proc.stderr.strip() or proc.stdout.strip()}")
+        console.print("[dim](若已存在, 先 claude mcp remove conductor)[/]")
+        raise typer.Exit(1)
+
+
 @app.callback(invoke_without_command=True)
 def _root(
     ctx: typer.Context,
