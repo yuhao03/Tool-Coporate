@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ..config import app_dir
 from ..cost import Usage
 from .base import Backend, BackendRequest, BackendResult
 
@@ -25,10 +26,16 @@ def _expand(value: str) -> str:
 
 
 def _build_env(extra_env: dict | None) -> dict | None:
-    """合并 os.environ 与 extra_env(值经 ${VAR} 展开); extra_env 为空返回 None."""
+    """合并 os.environ 与 extra_env(值经 ${VAR} 展开); extra_env 为空返回 None.
+
+    重要: 先清掉继承来的 ANTHROPIC_*/CLAUDE_* 环境变量 —— 用户可能把 Claude Code
+    全局配成了走 GLM(ANTHROPIC_BASE_URL/MODEL 等), 这些会盖过本后端自己设的 env。
+    """
     if not extra_env:
         return None
     env = dict(os.environ)
+    for k in [k for k in env if k.startswith("ANTHROPIC_") or k.startswith("CLAUDE_")]:
+        env.pop(k, None)
     for k, v in extra_env.items():
         env[k] = _expand(v)
     return env
@@ -111,7 +118,13 @@ class ClaudeCliBackend(Backend):
             cmd += ["--model", self.cfg.model]
         cmd += list(self.cfg.extra_args)
         timeout = req.timeout or self.cfg.timeout
-        code, out, err, tmsg = _run(cmd, req.cwd, timeout, extra_env=self.cfg.env)
+        # 隔离 Claude Code 配置目录: 不读用户的 ~/.claude(那里可能全局配成了 GLM),
+        # 改用 conductor 自己的空目录, 这样 claude 只认本后端传入的 env(端点/key/模型)。
+        isolated = app_dir() / "claude_home"
+        isolated.mkdir(parents=True, exist_ok=True)
+        env = dict(self.cfg.env)
+        env.setdefault("CLAUDE_CONFIG_DIR", str(isolated))
+        code, out, err, tmsg = _run(cmd, req.cwd, timeout, extra_env=env)
         meta = {"cmd": _truncate_cmd(cmd)}
         if tmsg:
             return BackendResult(ok=False, text="", error=tmsg, meta=meta)
