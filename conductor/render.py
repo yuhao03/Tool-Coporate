@@ -261,6 +261,54 @@ class Renderer:
     def _on_error(self, ev: dict) -> None:
         self.console.print(Panel(str(ev.get("error", "")), title="错误", border_style="red"))
 
+    # ---- 开发闭环 ----
+    def _on_loop_start(self, ev: dict) -> None:
+        if self._board_active():
+            return
+        self.console.print(Rule(
+            f"🔁 开发闭环: {ev.get('task','')[:50]}  (最多 {ev.get('max_rounds')} 轮)",
+            style="bold cyan"))
+
+    def _on_exec_doc(self, ev: dict) -> None:
+        if self._board_active() or not self.verbose:
+            return
+        self.console.print(Panel(_clip(ev.get("doc", "")),
+                                 title="📝 执行文档(Claude)", border_style="cyan"))
+
+    def _on_round_start(self, ev: dict) -> None:
+        if self._board_active():
+            return
+        self.console.print(Rule(f"— 第 {ev.get('round')} 轮 —", style="blue"))
+
+    def _on_review_done(self, ev: dict) -> None:
+        if self._board_active():
+            return
+        review = ev.get("review")
+        rnd = ev.get("round", "?")
+        if not review:
+            self.console.print(Panel("GLM 审核无结果(可能调用失败)",
+                                     title=f"🔎 第{rnd}轮审核", border_style="red"))
+            return
+        if review.get("approved"):
+            self.console.print(Text(f"✅ 第{rnd}轮审核通过: {review.get('summary','')}",
+                                    style="bold green"))
+            return
+        bugs = review.get("bugs", []) or []
+        body = "\n".join(f"• {b}" for b in bugs) or "(无具体问题)"
+        self.console.print(Panel(
+            f"{review.get('summary','')}\n\n{body}",
+            title=f"❌ 第{rnd}轮审核未通过 → 回 feed 给 Claude 重规划",
+            border_style="yellow"))
+
+    def _on_loop_done(self, ev: dict) -> None:
+        if self._board_active():
+            return
+        color = "green" if ev.get("approved") else "red"
+        sid = ev.get("session_id", "")
+        self.console.print(Panel(
+            ev.get("final", ""), title=f"🏁 闭环结束 · {ev.get('rounds')} 轮"
+            + (f"  [dim]session {sid}[/]" if sid else ""), border_style=color))
+
     # ---- 汇总 ----
     def _on_report(self, ev: dict) -> None:
         r = ev["report"]

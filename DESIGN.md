@@ -245,4 +245,9 @@ tool-coporate/
   - **git worktree 隔离并发**：`worktree.py` 为 acting 步骤建独立 worktree → 提交 → 顺序合并回主树，冲突自动上报；`--isolate` 让 `--jobs>1` 真正安全。
   - **终端原生 TUI 仪表盘**：`tui.py`(textual) 满屏键盘驱动 App，运行/会话/记忆三视图，实时步骤看板+流式；`conductor tui` 启动。
   - **产品化**：`conductor doctor` 诊断；`[tui]`/`[mcp]`/`[all]` 可选 extras；pyproject URLs/classifiers。
+- **v0.4.1 ✅（开发闭环）**：
+  - `orchestrator.dev_loop`：按用户语义的闭环 —— claude 规划(执行文档) → codex 执行 → **glm 审核**(结构化 JSON: approved/bugs) → 有 bug 则 **回 feed 给 claude 重规划**(而非直连 codex) → 循环到 glm 通过或达 max_rounds。
+  - `conductor loop "<task>" [--rounds N] [--verify cmd]` 命令。
+  - MCP 桥接工具 `glm_review` / `codex_run` / `glm_chat`：让 claude code 会话内手动调 GLM / Codex(真 claude 当大脑, 零嵌套)。
+  - 闭环 fake 测试(批准即停 / 有 bug 重规划 / 跑满轮数)。
 - **v0.5（计划）**：步骤级回滚、token 成本预算熔断、远程执行(SSH/Codex Cloud)、插件化角色市场。

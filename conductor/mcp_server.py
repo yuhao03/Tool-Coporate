@@ -32,9 +32,11 @@ def build_server():
             "缺少 mcp 依赖。请安装: uv pip install 'conductor[mcp]'  或  pip install mcp"
         ) from e
 
-    from .backends import make_backend
+    from . import router
+    from .backends import BackendRequest, make_backend
     from .config import load_config
     from .roles import ROLES, title_for
+    from pathlib import Path
 
     mcp = FastMCP("conductor")
 
@@ -98,6 +100,37 @@ def build_server():
             cost = f" ${rec.cost_usd:.4f}" if rec.cost_usd is not None else ""
             lines.append(f"- [{rec.role}] {title}: {rec.status}{cost}")
         return "\n".join(lines)
+
+    # ---- 桥接工具: 供 Claude Code / Codex 在会话内手动调用 GLM / Codex ----
+    @mcp.tool()
+    def glm_chat(prompt: str, system: str = "") -> str:
+        """直接调用 GLM-5.2。prompt=问题; system=可选系统提示(留空用通用风格)。"""
+        cfg = load_config()
+        be = make_backend(cfg.backends[cfg.role_for("debugger")])
+        res = be.complete(BackendRequest(prompt=prompt, system=system or None,
+                                         role="glm", cwd=Path.cwd()))
+        return res.text if res.ok else f"[失败] {res.error}"
+
+    @mcp.tool()
+    def glm_review(code: str, task: str = "", focus: str = "") -> str:
+        """让 GLM 审核代码找 bug。code=要审核的代码; task=它应实现的需求; focus=重点关注点。"""
+        cfg = load_config()
+        be = make_backend(cfg.backends[cfg.role_for("debugger")])
+        prompt = router.build_review_prompt(
+            task or "(未提供具体需求)", focus or "按需求与代码质量审核", "", code, "")
+        res = be.complete(BackendRequest(prompt=prompt, role="glm",
+                                         json_mode=True, cwd=Path.cwd()))
+        return res.text if res.ok else f"[失败] {res.error}"
+
+    @mcp.tool()
+    def codex_run(task: str, workdir: str = "") -> str:
+        """把一个编码任务交给原生 Codex 执行(它会改文件)。task=具体指令; workdir=工作目录。"""
+        cfg = load_config()
+        be = make_backend(cfg.backends[cfg.role_for("coder")])
+        res = be.complete(BackendRequest(
+            prompt=task, role="coder",
+            cwd=Path(workdir) if workdir else Path.cwd()))
+        return res.text if res.ok else f"[失败] {res.error}"
 
     return mcp
 

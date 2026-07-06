@@ -35,6 +35,17 @@ def is_git_repo(d: Path) -> bool:
     return rc == 0
 
 
+def current_diff(d: Path, max_chars: int = 8000) -> str:
+    """返回 d 相对 HEAD 的未提交改动 diff(供 GLM 审核); 非 git 仓库返回空串。"""
+    if not is_git_repo(d):
+        return ""
+    rc, out, _ = _git(["diff", "HEAD"], d)
+    if rc != 0 or not out.strip():
+        rc, out, _ = _git(["diff"], d)
+    out = (out or "").strip()
+    return out[:max_chars] if out else ""
+
+
 def has_git() -> bool:
     from shutil import which
     return which("git") is not None

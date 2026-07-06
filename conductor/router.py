@@ -100,3 +100,75 @@ def _extract_json(text: str) -> str | None:
 
 def system_prompt() -> str:
     return system_prompt_for(PLANNER_ROLE)
+
+
+# --------------------------------------------------------------------------- #
+# 开发闭环 (dev loop): 规划(claude) → 执行(codex) → 审核(glm) → 重规划(claude)
+# --------------------------------------------------------------------------- #
+def build_exec_doc_prompt(task: str, context: str = "") -> str:
+    """让 planner 产出一份「执行文档」供 Codex 照做。"""
+    ctx = f"\n\n[补充上下文]\n{context}" if context else ""
+    return (
+        f"任务:\n{task}{ctx}\n\n"
+        "请作为资深技术负责人, 产出一分简洁的「执行文档」供 Codex 直接照做:\n"
+        "- 要改/新增哪些文件, 各自做什么\n"
+        "- 关键实现思路、接口/函数签名约定\n"
+        "- 验收标准(怎样算做对了)\n"
+        "只输出 markdown 文档本身, 不要寒暄。"
+    )
+
+
+def build_review_prompt(task: str, doc: str, diff: str, exec_summary: str,
+                        verify_out: str) -> str:
+    """让 GLM 审核本轮实现, 输出结构化 JSON。"""
+    diff_block = (f"\n[本轮代码改动 diff]\n{diff}" if diff
+                  else f"\n[Codex 执行摘要]\n{exec_summary[:2000]}" if exec_summary else "")
+    verify_block = f"\n[校验输出]\n{verify_out[:2000]}" if verify_out else ""
+    return (
+        f"你是严格的代码审核专家。判断本轮实现是否「正确实现了任务」。\n\n"
+        f"[任务]\n{task}\n\n[执行文档]\n{doc[:3000]}"
+        f"{diff_block}{verify_block}\n\n"
+        "只输出如下 JSON(不要 markdown 围栏):\n"
+        '{"approved": true/false, '
+        '"bugs": ["具体问题(含位置+现象+修复建议)", "..."], '
+        '"summary": "一句话总评"}\n'
+        "规则: 已正确实现且无明显 bug → approved=true; 否则 approved=false 并在 bugs 列出每个问题。"
+    )
+
+
+def parse_review(text: str) -> dict | None:
+    """解析 GLM 审核输出。返回 {approved, bugs, summary} 或 None。"""
+    if not text:
+        return None
+    raw = _extract_json(text)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    approved = bool(data.get("approved", False))
+    bugs = data.get("bugs", [])
+    if not isinstance(bugs, list):
+        bugs = [str(bugs)]
+    else:
+        bugs = [str(b) for b in bugs if b]
+    return {"approved": approved, "bugs": bugs,
+            "summary": str(data.get("summary", "")).strip()}
+
+
+def build_replan_prompt(task: str, prev_doc: str, review: dict, verify_out: str) -> str:
+    """让 planner 基于审核问题重新出执行文档。"""
+    bugs = review.get("bugs", []) if review else []
+    bugs_block = "\n".join(f"- {b}" for b in bugs) or "- (审核未给出具体问题)"
+    verify_block = f"\n[校验输出]\n{verify_out[:2000]}" if verify_out else ""
+    return (
+        f"任务:\n{task}\n\n"
+        f"[上一版执行文档]\n{prev_doc[:3000]}\n\n"
+        f"[GLM 审核未通过, 发现的问题]\n{bugs_block}{verify_block}\n\n"
+        "请针对上述问题, 重新产出一分「修订执行文档」供 Codex 照做, 务必解决这些问题。\n"
+        "只输出 markdown 文档本身。"
+    )
+

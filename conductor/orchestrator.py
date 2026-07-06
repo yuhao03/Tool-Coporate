@@ -382,6 +382,127 @@ class Orchestrator:
         session.verify_ok = ok
         session.debug_rounds = rounds
 
+    # ---- 开发闭环: 规划(claude) → 执行(codex) → 审核(glm) → 重规划(claude) ----
+    def dev_loop(
+        self,
+        task: str,
+        max_rounds: int = 5,
+        verify_command: str = "",
+        context: str = "",
+        stream: bool = False,
+    ) -> RunReport:
+        """按用户语义的开发闭环运行, 直到 GLM 审核通过或达到 max_rounds。"""
+        from .worktree import current_diff as _diff
+
+        session = Session(task=task, status=S_RUNNING)
+        self.store.save(session)
+        self._emit({"type": "loop_start", "task": task, "max_rounds": max_rounds,
+                    "session_id": session.id})
+
+        # 0. Claude 产出执行文档
+        doc = self._exec_doc(task, self._combined_context(context)) or task
+        self._emit({"type": "exec_doc", "doc": doc[:4000]})
+
+        approved = False
+        last_review: dict | None = None
+        rounds = 0
+        vcmd = (verify_command or self.cfg.orchestration.verify_command or "").strip()
+
+        for r in range(1, max_rounds + 1):
+            rounds = r
+            self._emit({"type": "round_start", "round": r})
+            # 1. Codex 执行
+            exec_step = {"title": f"第{r}轮·执行", "role": "coder"}
+            self._emit({"type": "step_start", "step": exec_step})
+            exec_res = self._codex_exec(doc)
+            self._emit({"type": "step_done", "ok": exec_res.ok, "step": exec_step,
+                        "text": exec_res.text, "error": exec_res.error, "model": exec_res.model})
+            self._record(session, exec_step["title"], "coder", exec_res)
+            # 2. 可选校验
+            verify_ok, verify_out = True, ""
+            if vcmd:
+                verify_ok, verify_out = _run_verify(vcmd, self.work_dir)
+                self._emit({"type": "verify_done", "ok": verify_ok, "output": verify_out})
+            # 3. GLM 审核
+            diff = _diff(self.work_dir)
+            review = self._glm_review(task, doc, diff, exec_res.text, verify_out)
+            last_review = review
+            self._emit({"type": "review_done", "round": r,
+                        "step": {"title": f"第{r}轮·审核", "role": "debugger"}, "review": review})
+            self._record(session, f"第{r}轮·审核", "debugger", BackendResult(
+                ok=True, text=(review or {}).get("summary", ""), model="glm"))
+            if review and review.get("approved") and verify_ok:
+                approved = True
+                break
+            # 4. Claude 基于审核问题重规划
+            replan_step = {"title": f"第{r}轮·重规划", "role": "planner"}
+            self._emit({"type": "step_start", "step": replan_step})
+            new_doc = self._claude_replan(task, doc, review or {}, verify_out)
+            self._emit({"type": "step_done", "ok": bool(new_doc), "step": replan_step,
+                        "text": (new_doc or "")[:4000]})
+            if new_doc:
+                doc = new_doc
+                self._record(session, replan_step["title"], "planner",
+                             BackendResult(ok=True, text=new_doc, model="claude"))
+
+        if approved:
+            final = f"✅ 第 {rounds} 轮通过 GLM 审核, 任务完成。"
+            session.status = S_DONE
+        else:
+            bugs = (last_review or {}).get("bugs", [])
+            final = (f"⚠️ 达到 {max_rounds} 轮仍未通过。最后问题: "
+                     + ("; ".join(bugs[:3]) if bugs else "审核未通过"))
+            session.status = S_FAILED
+        session.final = final
+        self.store.save(session)
+        self._emit({"type": "loop_done", "approved": approved, "rounds": rounds,
+                    "final": final, "session_id": session.id})
+        return RunReport(task=task, session_id=session.id, final=final,
+                         verify_ok=approved, session=session)
+
+    # ---- 闭环用的小后端调用 ----
+    def _exec_doc(self, task: str, ctx: str) -> str | None:
+        be, req = self.request_for(router.PLANNER_ROLE, router.build_exec_doc_prompt(task, ctx))
+        res = be.complete(req)
+        self._apply_cost(res)
+        return res.text.strip() if res.ok else None
+
+    def _codex_exec(self, doc: str) -> BackendResult:
+        be, req = self.request_for(
+            "coder",
+            "请严格按以下「执行文档」完成实现(直接改文件/写代码, 遵循既有风格):\n\n"
+            f"{doc}\n\n完成后用 3~5 行给改动摘要。")
+        res = be.complete(req)
+        self._apply_cost(res)
+        return res
+
+    def _glm_review(self, task: str, doc: str, diff: str, exec_summary: str,
+                    verify_out: str) -> dict | None:
+        be, req = self.request_for(
+            "debugger",
+            router.build_review_prompt(task, doc, diff, exec_summary, verify_out),
+            json_mode=True)
+        res = be.complete(req)
+        self._apply_cost(res)
+        if not res.ok:
+            return None
+        return router.parse_review(res.text)
+
+    def _claude_replan(self, task: str, prev_doc: str, review: dict, verify_out: str) -> str | None:
+        be, req = self.request_for(
+            router.PLANNER_ROLE, router.build_replan_prompt(task, prev_doc, review, verify_out))
+        res = be.complete(req)
+        self._apply_cost(res)
+        return res.text.strip() if res.ok else None
+
+    def _record(self, session: Session, title: str, role: str, res: BackendResult) -> None:
+        rec = StepRecord(title=title, role=role, status=DONE if res.ok else FAILED,
+                         text=res.text, error=res.error, model=res.model,
+                         usage=res.usage.to_dict() if res.usage else None,
+                         cost_usd=res.cost_usd, finished_at=_now_iso())
+        session.upsert_record(rec)
+        self.store.save(session)
+
     def _compose_final(self, report: RunReport) -> str:
         executed = sum(1 for r in report.records.values() if r.status == DONE)
         failed = sum(1 for r in report.records.values() if r.status == FAILED)

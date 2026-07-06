@@ -223,6 +223,26 @@ def run(
 
 
 @app.command()
+def loop(
+    task: str = typer.Argument(..., help="任务描述"),
+    rounds: int = typer.Option(5, "--rounds", "-r", min=1, max=20, help="最大循环轮数"),
+    verify: str = typer.Option("", "--verify", help="每轮校验命令, 例: pytest -q"),
+    workdir: str = typer.Option("", "--workdir", "-C", help="工作目录(默认当前)"),
+    stream: bool = typer.Option(False, "--stream", help="流式输出"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="显示执行文档等详情"),
+) -> None:
+    """开发闭环: Claude规划→Codex执行→GLM审核→(有bug)Claude重规划, 循环到通过。
+
+    独立进程运行; 内部调的是无头 claude -p(规划实例), 不是你交互式的 claude code,
+    两者不冲突。建议在普通终端(或另开终端)运行。
+    """
+    orch = _orch(verbose=verbose, work_dir=workdir or None)
+    report = orch.dev_loop(task, max_rounds=rounds, verify_command=verify, stream=stream)
+    if not report.verify_ok:
+        raise typer.Exit(1)
+
+
+@app.command()
 def resume(
     session_id: str = typer.Argument(..., help="会话 id (见 conductor sessions)"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n"),
