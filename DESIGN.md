@@ -211,8 +211,7 @@ tool-coporate/
 │   ├── orchestrator.py       run/ask 主流程 + debug + 会话 + 流式 + 隔离
 │   ├── render.py             rich 渲染: 行内 / TUI 看板(live)
 │   ├── mcp_server.py         MCP server(让 Claude Code 直接调用)
-│   ├── web.py                Web UI 后端(FastAPI + SSE)
-│   ├── web_static/           Web UI 前端(index.html / app.js / style.css)
+│   ├── tui.py                终端原生交互式仪表盘(textual)
 │   ├── cli.py                typer 入口
 │   └── backends/
 │       ├── __init__.py
@@ -242,8 +241,8 @@ tool-coporate/
   - **成本统计**：收集 `usage`，按定价表估 USD（claude 直读 `total_cost_usd`）；会话/总结/`conductor session` 均展示。
   - **MCP server**：`conductor mcp` 以 stdio 暴露 `conductor_plan/ask/run/who/backends` 工具，Claude Code 可 `claude mcp add conductor -- conductor mcp` 直接调用。
 - **v0.4 ✅（产品化）**：
-  - **Web UI**：`web.py`(FastAPI) + `web_static/`(深色 SPA 看板)；SSE 实时推送步骤状态/成本/token；会话/记忆可视化；`conductor web` 启动。
   - **跨会话记忆**：`memory.py` 全局/项目两级存储，自动注入 planner 与各步上下文；`conductor memory` 管理。
   - **git worktree 隔离并发**：`worktree.py` 为 acting 步骤建独立 worktree → 提交 → 顺序合并回主树，冲突自动上报；`--isolate` 让 `--jobs>1` 真正安全。
-  - **产品化**：`conductor doctor` 诊断；`[web]`/`[mcp]`/`[all]` 可选 extras；pyproject URLs/classifiers；32 单测。
-- **v0.5（计划）**：步骤级回滚、token 成本预算熔断、远程执行(SSH/Codex Cloud)、多用户/鉴权 Web、插件化角色市场。
+  - **终端原生 TUI 仪表盘**：`tui.py`(textual) 满屏键盘驱动 App，运行/会话/记忆三视图，实时步骤看板+流式；`conductor tui` 启动。
+  - **产品化**：`conductor doctor` 诊断；`[tui]`/`[mcp]`/`[all]` 可选 extras；pyproject URLs/classifiers。
+- **v0.5（计划）**：步骤级回滚、token 成本预算熔断、远程执行(SSH/Codex Cloud)、插件化角色市场。

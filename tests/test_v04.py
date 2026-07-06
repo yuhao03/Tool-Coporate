@@ -111,30 +111,33 @@ def test_worktree_degrades_without_git(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# web (FastAPI TestClient) — 缺 fastapi 则跳过
+# TUI 仪表盘 (textual pilot) — 缺 textual 则跳过
 # --------------------------------------------------------------------------- #
-def test_web_app_endpoints(tmp_path, monkeypatch):
-    pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
+def test_tui_dashboard_renders_and_quits():
+    pytest.importorskip("textual")
+    import asyncio
 
-    monkeypatch.setenv("CONDUCTOR_HOME", str(tmp_path / "cond"))
-    from conductor.web import create_app
+    from conductor.tui import create_app
 
-    app = create_app(work_dir=tmp_path)
-    client = TestClient(app)
+    async def scenario():
+        app = create_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            # 喂入计划: 两步
+            app.handle_event({"type": "steps", "steps": [
+                {"title": "实现登录", "role": "coder", "instruction": "x"},
+                {"title": "设计 UI", "role": "designer", "instruction": "y"}]})
+            await pilot.pause()
+            table = app.query_one("#steps")
+            assert table.row_count == 2
+            # 标记第一步完成 + 成本
+            app.handle_event({"type": "step_done", "ok": True,
+                              "step": {"title": "实现登录", "role": "coder"},
+                              "text": "done", "model": "codex", "cost_usd": 0.01})
+            await pilot.pause()
+            # 切到会话标签再切回, 验证 keybinding 不崩
+            await pilot.press("2")
+            await pilot.press("1")
+            await pilot.press("q")  # 退出
 
-    r = client.get("/api/config")
-    assert r.status_code == 200
-    j = r.json()
-    assert "roles" in j and "backends" in j
-
-    assert client.get("/api/sessions").status_code == 200
-    assert client.get("/api/memory").status_code == 200
-
-    r = client.post("/api/memory", json={"key": "栈", "content": "FastAPI",
-                                         "scope": "project", "tags": []})
-    assert r.status_code == 200 and r.json()["key"] == "栈"
-
-    r = client.get("/")
-    assert r.status_code == 200 and "<html" in r.text.lower()
+    asyncio.run(scenario())
 

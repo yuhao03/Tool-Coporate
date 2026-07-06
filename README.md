@@ -35,12 +35,14 @@ uv tool install -e .
 pipx install -e .
 
 # 可选 extras（按需）
-uv pip install 'conductor[web]'   # Web UI 看板 (fastapi + uvicorn)
+uv pip install 'conductor[tui]'   # 终端原生交互式 TUI 仪表盘 (textual)
 uv pip install 'conductor[mcp]'   # 作为 MCP server 接入 Claude Code
 uv pip install 'conductor[all]'   # 全部
 ```
 
-三种使用形态：**CLI**（终端）/ **Web UI**（浏览器看板，实时 SSE）/ **MCP**（在 Claude Code 里直接调用）。
+主力形态（终端优先）：
+- **CLI / TUI**（日常）：`conductor run`、`conductor tui` 满屏看板、`memory/sessions/resume` …
+- **MCP**：在 Claude Code 里直接调用 `conductor_plan/ask/run`。
 
 ## 快速开始
 
@@ -108,14 +110,14 @@ verify_command = ""              # 例如 "pytest -q"
 | `conductor sessions` / `session <id>` | 列出 / 查看会话（含成本） |
 | `conductor board [id]` | 步骤看板（静态） |
 | `conductor memory list/add/remove` | 跨会话记忆管理 |
-| `conductor web` | 启动 Web UI 看板（实时 SSE，浏览器访问） |
+| `conductor tui` | 终端原生交互式仪表盘（满屏看板，键盘驱动） |
 | `conductor mcp` | 以 MCP server 运行，供 Claude Code 调用 |
 
 `run` / `resume` 常用选项：`--dry-run`、`--jobs N`（并发）、`--isolate`（worktree 隔离）、`--board`（TUI 看板）、`--stream`（流式）。
 
 ## 进阶用法
 
-**Web UI 看板**：`conductor web` → 浏览器打开 `http://127.0.0.1:8765`，可视化新建任务、看步骤实时状态/成本/token、管理记忆，SSE 实时推送。
+**终端原生 TUI 仪表盘**：`conductor tui` 进入满屏交互界面（类 lazygit），键盘发起任务、实时看步骤状态/成本/token、翻会话、管记忆，全程不用记子命令。需 `conductor[tui]`。
 
 **跨会话记忆**：`conductor memory add 技术栈 "FastAPI + React"` 记住项目事实，后续 `run` 会自动注入任务上下文。分项目级（`<项目>/.conductor/memory.json`）与全局级。
 

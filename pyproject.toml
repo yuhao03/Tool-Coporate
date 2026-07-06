@@ -37,17 +37,14 @@ Issues = "https://github.com/yuhao03/Tool-Coporate/issues"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.2"]
-web = ["fastapi>=0.110", "uvicorn>=0.27"]
-all = ["mcp>=1.2", "fastapi>=0.110", "uvicorn>=0.27"]
+tui = ["textual>=0.40"]
+all = ["mcp>=1.2", "textual>=0.40"]
 
 [project.scripts]
 conductor = "conductor.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["conductor"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"conductor/web_static" = "conductor/web_static"
 
 [tool.hatch.build.targets.sdist]
 include = ["conductor", "tests", "examples", "README.md", "DESIGN.md", "LICENSE"]

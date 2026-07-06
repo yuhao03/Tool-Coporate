@@ -395,30 +395,26 @@ def doctor() -> None:
     except ModuleNotFoundError:
         check("可选 mcp", False, "未安装: uv pip install 'conductor\\[mcp]'")
     try:
-        import fastapi  # noqa: F401
-        import uvicorn  # noqa: F401
-        check("可选 web", True, "已安装 (conductor web 可用)")
+        import textual  # noqa: F401
+        check("可选 tui", True, "已安装 (conductor tui 可用)")
     except ModuleNotFoundError:
-        check("可选 web", False, "未安装: uv pip install 'conductor\\[web]'")
+        check("可选 tui", False, "未安装: uv pip install 'conductor\\[tui]'")
     check("配置", user_config_path().exists(),
           str(user_config_path()) + (" (存在)" if user_config_path().exists() else " (用 init 生成)"))
 
 
-# ---- Web UI ----
+# ---- 终端原生 TUI 仪表盘 ----
 @app.command()
-def web(
-    host: str = typer.Option("127.0.0.1", "--host", "-h"),
-    port: int = typer.Option(8765, "--port", "-p"),
+def tui(
     workdir: str = typer.Option("", "--workdir", "-C", help="项目工作目录(默认当前)"),
 ) -> None:
-    """启动 Web UI 看板(实时 SSE). 需可选依赖: uv pip install 'conductor[web]'."""
+    """启动终端原生交互式 TUI 仪表盘(满屏看板, 键盘驱动)。需 conductor\\[tui]。"""
     try:
-        from .web import run_server
-    except ModuleNotFoundError:
-        console.print("[red]缺少 web 依赖。请安装: uv pip install 'conductor\\[web]'[/]")
+        from .tui import create_app
+    except ModuleNotFoundError as e:
+        console.print(f"[red]{e}[/]")
         raise typer.Exit(1)
-    console.print(f"[bold]🎼 Conductor Web UI[/] → [cyan]http://{host}:{port}[/]")
-    run_server(host=host, port=port, work_dir=workdir or None)
+    create_app(work_dir=workdir or None).run()
 
 
 @app.command()
@@ -443,7 +439,14 @@ def _root(
         console.print(f"conductor {__version__}")
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
-        console.print(ctx.get_help())
+        # 裸 conductor: 装了 [tui] 就进交互式仪表盘, 否则显示帮助
+        try:
+            from .tui import create_app
+            create_app().run()
+        except ModuleNotFoundError:
+            console.print(ctx.get_help())
+            console.print("\n[dim]提示: 安装 conductor[tui] 后, 直接运行 [b]conductor[/b]"
+                          " 即可进入交互式仪表盘; 或用 [b]conductor run[/b] 等子命令。[/]")
         raise typer.Exit()
 
 
