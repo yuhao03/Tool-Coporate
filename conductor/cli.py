@@ -19,12 +19,16 @@ from .backends import BackendRequest, make_backend
 from .config import (
     app_dir,
     load_config,
+    overrides_path,
+    save_model_overrides,
     user_config_path,
     write_default_config,
 )
 from .cost import format_cost
 from .memory import GLOBAL_SCOPE, PROJECT_SCOPE, MemoryStore
+from .models import presets_for
 from .orchestrator import Orchestrator
+from rich.prompt import Confirm, Prompt
 from .render import Renderer, STATUS_ICON
 from .roles import ROLES, title_for
 from .session import SessionStore
@@ -42,12 +46,26 @@ def _renderer(verbose: bool = False, board: bool = False) -> Renderer:
     return Renderer(console=console, verbose=verbose, use_board=board)
 
 
+def _apply_model_overrides(cfg, sets: list[str]) -> None:
+    """解析 ['role=model', ...], 临时覆盖对应后端的 model(不落盘)。"""
+    for s in sets or []:
+        if "=" not in s:
+            continue
+        role, model = s.split("=", 1)
+        role, model = role.strip(), model.strip()
+        backend = cfg.roles.get(role)
+        if backend and backend in cfg.backends:
+            cfg.backends[backend].model = model
+            console.print(f"[dim]--set {role}={model}[/]")
+
+
 def _orch(
     verbose: bool = False, work_dir: str | None = None,
     jobs: int = 1, board: bool = False, isolate: bool = False,
-    gather_memory: bool = True,
+    gather_memory: bool = True, model_overrides: list[str] | None = None,
 ) -> Orchestrator:
     cfg = load_config()
+    _apply_model_overrides(cfg, model_overrides or [])
     wd = work_dir or Path.cwd()
     mem = MemoryStore(work_dir=wd).context_text() if gather_memory else ""
     orch = Orchestrator(cfg, work_dir=wd, max_workers=jobs,
@@ -146,6 +164,83 @@ def who(role: str = typer.Argument(..., help="角色: " + "/".join(ROLES))) -> N
 
 
 @app.command()
+def model() -> None:
+    """交互式选择每个角色用的模型(写入 overrides.toml, 不动主配置)。"""
+    cfg = load_config()
+    console.print(Panel("为每个角色选模型（回车=保留当前；输入序号或自定义模型 id）",
+                        title="🎛 模型选择", border_style="cyan"))
+    for role in ROLES:
+        be = cfg.role_for(role)
+        bc = cfg.backends[be]
+        cur = bc.model or "(后端默认)"
+        presets = presets_for(bc.type)
+        console.print(f"\n[bold]{role}[/] → 后端 [cyan]{be}[/] [dim]({bc.type})[/]"
+                      f"  当前: [yellow]{cur}[/]")
+        for i, m in enumerate(presets, 1):
+            mark = " ←" if m == bc.model else ""
+            console.print(f"  {i}) {m}{mark}")
+        choice = Prompt.ask("  选择", default="", console=console).strip()
+        if not choice:
+            continue
+        if choice.isdigit() and 1 <= int(choice) <= len(presets):
+            new = presets[int(choice) - 1]
+        else:
+            new = choice
+        bc.model = new
+        console.print(f"  [green]✓ {role} → {new}[/]")
+    models = {name: b.model for name, b in cfg.backends.items() if b.model}
+    save_model_overrides(models)
+    console.print(f"\n[bold green]✓ 已保存[/] → [dim]{overrides_path()}[/]")
+    console.print("之后 conductor loop/run 自动用新模型; 临时换用 [cyan]--set role=model[/]")
+
+
+@app.command()
+def setup() -> None:
+    """交互式配置向导: 为每个模型设 base_url / key 环境变量 / 默认模型, 生成配置。
+
+    key 一律以 ${环境变量} 引用(不落明文); 末尾会打印需要 export 的变量。
+    """
+    console.print(Panel("Conductor 配置向导 — key 以 ${环境变量} 引用, 不落明文",
+                        title="🛠 初始化配置", border_style="cyan"))
+    defaults = {
+        "claude": ("https://for-opus.site", "CLAUDE_API_KEY", "claude-opus-4.7"),
+        "codex":  ("", "CODEX_API_KEY", ""),
+        "glm":    ("https://api.z.ai/api/anthropic", "GLM_API_KEY", "glm-5.2"),
+    }
+    blocks: list[str] = []
+    exports: list[str] = []
+    for name in ("claude", "codex", "glm"):
+        console.print(f"\n[bold cyan]== {name} ==[/]")
+        d_url, d_key, d_model = defaults[name]
+        url = Prompt.ask("  base_url(留空=codex 用本地登录)", default=d_url, console=console).strip()
+        if name == "codex" and not url:
+            blocks.append('[backends.codex]\ntype = "codex-cli"\nfull_auto = true\n\n')
+            continue
+        keyenv = Prompt.ask("  key 的环境变量名", default=d_key, console=console).strip()
+        model = Prompt.ask("  默认模型(可空)", default=d_model, console=console).strip()
+        b = f'[backends.{name}]\ntype = "claude-cli"\n'
+        if model:
+            b += f'model = "{model}"\n'
+        b += f'[backends.{name}.env]\nANTHROPIC_BASE_URL = "{url}"\nANTHROPIC_API_KEY = "${{{keyenv}}}"\n\n'
+        blocks.append(b)
+        exports.append(keyenv)
+    roles_block = (
+        '[roles]\nplanner  = "claude"\ncoder    = "codex"\n'
+        'debugger = "glm"\ndesigner = "glm"\n\n'
+        '[orchestration]\nmax_debug_rounds = 2\nverify_command = ""\nplan_fallback_role = "coder"\n'
+    )
+    path = user_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Conductor 配置 — 由 conductor setup 生成。key 走环境变量。\n\n"
+                    + "".join(blocks) + roles_block, encoding="utf-8")
+    console.print(f"\n[bold green]✓ 配置已写入[/] {path}")
+    console.print("[bold]下一步, 在终端 export 你的 key:[/]")
+    for k in exports:
+        console.print(f"  export {k}='你的key'")
+    console.print("然后: conductor backends  检查 →  conductor loop \"任务\"  试跑。")
+
+
+@app.command()
 def plan(
     task: str = typer.Argument(..., help="任务描述"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="显示 planner 原始输出"),
@@ -211,12 +306,14 @@ def run(
     board: bool = typer.Option(False, "--board", "-b", help="TUI 看板实时刷新"),
     stream: bool = typer.Option(False, "--stream", help="流式输出(HTTP 后端逐字)"),
     isolate: bool = typer.Option(False, "--isolate", help="acting 步骤在独立 git worktree 执行(并发安全, 需干净 git 仓库)"),
+    set_model: list[str] = typer.Option([], "--set", help="临时换模型, 如 --set planner=claude-opus-4.6 (可重复)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="显示 planner 原始输出与各步命令"),
 ) -> None:
     """全自动编排: plan → (依赖图并发) execute → verify → debug 循环."""
     if jobs > 1 and not isolate:
         console.print("[yellow]提示: 并发(--jobs>1)且未 --isolate 时, acting 步骤改同一目录可能冲突; 建议加 --isolate[/]")
-    orch = _orch(verbose=verbose, work_dir=workdir or None, jobs=jobs, board=board, isolate=isolate)
+    orch = _orch(verbose=verbose, work_dir=workdir or None, jobs=jobs, board=board,
+                 isolate=isolate, model_overrides=set_model)
     report = orch.run(task, dry_run=dry_run, stream=stream)
     if report.verify_ok is False:
         raise typer.Exit(1)
@@ -229,6 +326,7 @@ def loop(
     verify: str = typer.Option("", "--verify", help="每轮校验命令, 例: pytest -q"),
     workdir: str = typer.Option("", "--workdir", "-C", help="工作目录(默认当前)"),
     stream: bool = typer.Option(False, "--stream", help="流式输出"),
+    set_model: list[str] = typer.Option([], "--set", help="临时换模型, 如 --set planner=claude-opus-4.6 (可重复)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="显示执行文档等详情"),
 ) -> None:
     """开发闭环: Claude规划→Codex执行→GLM审核→(有bug)Claude重规划, 循环到通过。
@@ -236,7 +334,7 @@ def loop(
     独立进程运行; 内部调的是无头 claude -p(规划实例), 不是你交互式的 claude code,
     两者不冲突。建议在普通终端(或另开终端)运行。
     """
-    orch = _orch(verbose=verbose, work_dir=workdir or None)
+    orch = _orch(verbose=verbose, work_dir=workdir or None, model_overrides=set_model)
     report = orch.dev_loop(task, max_rounds=rounds, verify_command=verify, stream=stream)
     if not report.verify_ok:
         raise typer.Exit(1)

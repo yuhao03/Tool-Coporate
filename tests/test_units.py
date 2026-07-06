@@ -147,3 +147,17 @@ def test_cost_model_prefix_match():
 def test_cost_format():
     assert format_cost(None) == "—"
     assert "$" in format_cost(0.5)
+
+
+def test_model_overrides_save_load(tmp_path, monkeypatch):
+    """conductor model 写的 overrides.toml 应被 load_config 合并, 覆盖主配置 model。"""
+    monkeypatch.setenv("CONDUCTOR_HOME", str(tmp_path / "cond"))
+    from conductor import config as C
+
+    C.save_model_overrides({"claude": "claude-opus-4.6", "glm": "glm-5-turbo"})
+    assert C._load_model_overrides() == {"claude": "claude-opus-4.6", "glm": "glm-5-turbo"}
+
+    cfg = C.load_config()
+    assert cfg.backends["claude"].model == "claude-opus-4.6"
+    assert cfg.backends["glm"].model == "glm-5-turbo"
+

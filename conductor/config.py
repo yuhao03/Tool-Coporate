@@ -96,6 +96,11 @@ def user_config_path() -> Path:
     return app_dir() / "config.toml"
 
 
+def overrides_path() -> Path:
+    """模型选择覆盖文件(由 conductor model 写入), 与主配置分离, 保护主配置注释。"""
+    return app_dir() / "overrides.toml"
+
+
 def project_config_path(start: Path | None = None) -> Path | None:
     """从 start(默认 cwd) 向上找仓库根的 conductor.toml."""
     here = (start or Path.cwd()).resolve()
@@ -211,8 +216,42 @@ def load_config(project_dir: Path | None = None) -> Config:
         merged = _deep_merge(merged, _toml.loads(proj.read_text(encoding="utf-8")))
         sources.append(proj)
     cfg = _build_config(merged)
+    # 应用模型选择覆盖(conductor model 写入的 overrides.toml)
+    for name, model in _load_model_overrides().items():
+        if name in cfg.backends:
+            cfg.backends[name].model = model
     cfg.sources = sources
     return cfg
+
+
+def _load_model_overrides() -> dict[str, str]:
+    import json
+
+    p = overrides_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = _toml.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, str] = {}
+    for name, sec in (data.get("backends") or {}).items():
+        if isinstance(sec, dict) and sec.get("model"):
+            out[name] = str(sec["model"])
+    return out
+
+
+def save_model_overrides(models: dict[str, str]) -> Path:
+    """把 {backend: model} 写入 overrides.toml(覆盖主配置里的 model 字段)。"""
+    import json
+
+    p = overrides_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    parts = ["# 由 conductor model 写入; 覆盖主配置里的 model 字段\n"]
+    for name, model in models.items():
+        parts.append(f"[backends.{name}]\nmodel = {json.dumps(str(model))}\n\n")
+    p.write_text("".join(parts), encoding="utf-8")
+    return p
 
 
 def write_default_config(path: Path | None = None) -> Path:
