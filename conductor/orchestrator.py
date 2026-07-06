@@ -400,7 +400,14 @@ class Orchestrator:
                     "session_id": session.id})
 
         # 0. Claude 产出执行文档
-        doc = self._exec_doc(task, self._combined_context(context)) or task
+        plan_step = {"title": "Claude 规划(产出执行文档)", "role": "planner"}
+        self._emit({"type": "step_start", "step": plan_step})
+        doc = self._exec_doc(task, self._combined_context(context))
+        ok_plan = bool(doc)
+        doc = doc or task
+        self._emit({"type": "step_done", "ok": ok_plan, "step": plan_step,
+                    "text": doc[:1500], "model": "claude",
+                    "error": None if ok_plan else "规划失败, 用任务原文兜底"})
         self._emit({"type": "exec_doc", "doc": doc[:4000]})
 
         approved = False

@@ -130,14 +130,20 @@ class ClaudeCliBackend(Backend):
         if not path:
             return False, "未找到 claude CLI (安装 Claude Code 后重试)"
         msgs = [f"claude CLI 就绪: {path}"]
-        # 若配置了 env(如把 claude 指向智谱端点跑 GLM), 检查引用的变量是否已设置
-        if self.cfg.env:
-            missing = [k for k, v in self.cfg.env.items()
-                       if "${" in v and not _expand(v)]
-            if missing:
-                msgs.append(f"⚠ env 未设置: {missing}")
-            if self.cfg.model:
-                msgs.append(f"模型 {self.cfg.model}(经端点)")
+        if self.cfg.model:
+            msgs.append(f"模型 {self.cfg.model}(经端点)")
+        # 检查 env: 引用变量未设置 / 把 key 误写在 ${} 里
+        problems = []
+        for k, v in (self.cfg.env or {}).items():
+            if "${" not in v:
+                continue
+            exp = _expand(v)
+            if not exp:
+                problems.append(f"{k}(变量未设置)")
+            elif "${" in exp:
+                problems.append(f"{k}(格式错:别把 key 包进 ${{}} 里, 直接写 key 或用 ${{VAR名}})")
+        if problems:
+            msgs.append("⚠ " + "; ".join(problems))
         return True, " | ".join(msgs)
 
     def describe(self, req: BackendRequest) -> str:
