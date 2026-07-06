@@ -92,6 +92,35 @@ def app_dir() -> Path:
     return Path(env) if env else Path.home() / ".conductor"
 
 
+_ENV_LOADED = False
+
+
+def load_env_file() -> None:
+    """启动时自动加载 ~/.conductor/.env 到 os.environ(已存在的真实环境变量优先)。
+
+    这样 key 放进 .env 一次, 以后开任何终端都不用再 export。
+    """
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    _ENV_LOADED = True
+    p = app_dir() / ".env"
+    if not p.is_file():
+        return
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except OSError:
+        pass
+
+
 def user_config_path() -> Path:
     return app_dir() / "config.toml"
 
@@ -205,6 +234,7 @@ def _build_config(data: dict[str, Any]) -> Config:
 
 def load_config(project_dir: Path | None = None) -> Config:
     """加载并合并配置. 缺少文件不报错, 一律有合理默认."""
+    load_env_file()  # 先加载 ~/.conductor/.env 里的 key
     merged: dict[str, Any] = _toml.loads(DEFAULT_CONFIG_TOML)
     sources: list[Path] = []
     user = user_config_path()

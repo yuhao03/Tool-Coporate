@@ -208,7 +208,7 @@ def setup() -> None:
         "glm":    ("https://api.z.ai/api/anthropic", "GLM_API_KEY", "glm-5.2"),
     }
     blocks: list[str] = []
-    exports: list[str] = []
+    secrets: list[tuple[str, str]] = []  # (env_var_name, key_value)
     for name in ("claude", "codex", "glm"):
         console.print(f"\n[bold cyan]== {name} ==[/]")
         d_url, d_key, d_model = defaults[name]
@@ -218,12 +218,15 @@ def setup() -> None:
             continue
         keyenv = Prompt.ask("  key 的环境变量名", default=d_key, console=console).strip()
         model = Prompt.ask("  默认模型(可空)", default=d_model, console=console).strip()
+        keyval = Prompt.ask(f"  {keyenv} 的值(粘贴; 存到 ~/.conductor/.env, 留空跳过)",
+                            password=True, default="", console=console).strip()
         b = f'[backends.{name}]\ntype = "claude-cli"\n'
         if model:
             b += f'model = "{model}"\n'
         b += f'[backends.{name}.env]\nANTHROPIC_BASE_URL = "{url}"\nANTHROPIC_API_KEY = "${{{keyenv}}}"\n\n'
         blocks.append(b)
-        exports.append(keyenv)
+        if keyval:
+            secrets.append((keyenv, keyval))
     roles_block = (
         '[roles]\nplanner  = "claude"\ncoder    = "codex"\n'
         'debugger = "glm"\ndesigner = "glm"\n\n'
@@ -234,10 +237,17 @@ def setup() -> None:
     path.write_text("# Conductor 配置 — 由 conductor setup 生成。key 走环境变量。\n\n"
                     + "".join(blocks) + roles_block, encoding="utf-8")
     console.print(f"\n[bold green]✓ 配置已写入[/] {path}")
-    console.print("[bold]下一步, 在终端 export 你的 key:[/]")
-    for k in exports:
-        console.print(f"  export {k}='你的key'")
-    console.print("然后: conductor backends  检查 →  conductor loop \"任务\"  试跑。")
+    # 写 key 到 ~/.conductor/.env(权限 600), 之后开任何终端都不用再 export
+    if secrets:
+        import os
+        envp = app_dir() / ".env"
+        envp.write_text("# Conductor 密钥(由 setup 写入, chmod 600)。改 key 直接编辑本文件。\n"
+                        + "".join(f'{k}="{v}"\n' for k, v in secrets), encoding="utf-8")
+        os.chmod(envp, 0o600)
+        console.print(f"[bold green]✓ key 已存入[/] {envp} [dim](权限 600; 以后无需 export)[/]")
+    else:
+        console.print("[yellow]未输入 key —— 可手动编辑 ~/.conductor/.env 或运行时 export[/]")
+    console.print("\n现在直接: [cyan]conductor backends[/] 检查 →  [cyan]conductor loop \"任务\"[/] 试跑。")
 
 
 @app.command()
